@@ -7,10 +7,12 @@ import { Send, Zap, Check, Loader2, ExternalLink } from 'lucide-react';
 import type { ChatMessage, OnboardingState } from '@/lib/types';
 
 /* ── Conversation script ──────────────────────────────────── */
+type Option = { label: string; value: string };
+
 type Step = {
   key: keyof OnboardingState | null;
-  question: string;
-  options?: { label: string; value: string }[];
+  question: string | ((name: string) => string);
+  options?: Option[];
   validate?: (v: string) => string | null;
 };
 
@@ -22,12 +24,13 @@ const STEPS: Step[] = [
   },
   {
     key: 'goal',
-    question: (name?: string) => `Nice to meet you, ${name}! What skill or topic do you want to master? (e.g. "Python programming", "English grammar", "Digital marketing")`,
+    question: (name: string) =>
+      `Nice to meet you, ${name}! What skill or topic do you want to master? (e.g. "Python programming", "English grammar", "Digital marketing")`,
     validate: (v) => v.trim().length < 3 ? 'Tell me a bit more about your goal.' : null,
-  } as any,
+  },
   {
     key: 'level',
-    question: 'Great choice! What\'s your current level with this topic?',
+    question: "Great choice! What's your current level with this topic?",
     options: [
       { label: '🌱 Complete beginner', value: 'beginner' },
       { label: '📚 Intermediate',      value: 'intermediate' },
@@ -38,19 +41,16 @@ const STEPS: Step[] = [
     key: 'daily_time',
     question: 'How many minutes can you commit to learning each day?',
     options: [
-      { label: '⚡ 5 min — light',   value: '5' },
+      { label: '⚡ 5 min — light',    value: '5' },
       { label: '🔥 10 min — optimal', value: '10' },
       { label: '💪 20 min — serious', value: '20' },
       { label: '🏋️ 30 min — max',    value: '30' },
     ],
   },
-  {
-    key: null,
-    question: '',   // handled separately — shows Telegram link
-  },
 ];
 
-const BOT_USERNAME = process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME ?? 'your_bot';
+// Total data-collection steps (excludes the synthetic "done" state)
+const DATA_STEP_COUNT = STEPS.length;
 
 /* ── Typing indicator ─────────────────────────────────────── */
 function TypingDots() {
@@ -69,7 +69,7 @@ function TypingDots() {
 }
 
 /* ── Bubble ───────────────────────────────────────────────── */
-function Bubble({ msg, index }: { msg: ChatMessage; index: number }) {
+function Bubble({ msg }: { msg: ChatMessage }) {
   const isAI = msg.role === 'ai';
   return (
     <motion.div
@@ -99,14 +99,14 @@ function Bubble({ msg, index }: { msg: ChatMessage; index: number }) {
 /* ═══════════════════════════════════════════════════════════ */
 export default function OnboardingPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [input, setInput] = useState('');
-  const [step, setStep]   = useState(0);
-  const [typing, setTyping] = useState(false);
-  const [done, setDone]   = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [userId, setUserId]   = useState<string | null>(null);
-  const [error, setError]     = useState<string | null>(null);
-  const [state, setState] = useState<OnboardingState>({
+  const [input, setInput]       = useState('');
+  const [step, setStep]         = useState(0);
+  const [typing, setTyping]     = useState(false);
+  const [done, setDone]         = useState(false);
+  const [loading, setLoading]   = useState(false);
+  const [userId, setUserId]     = useState<string | null>(null);
+  const [error, setError]       = useState<string | null>(null);
+  const [collected, setCollected] = useState<OnboardingState>({
     step: 0, full_name: '', goal: '', level: '', daily_time: '',
   });
 
@@ -132,78 +132,92 @@ export default function OnboardingPage() {
     }, 900 + Math.random() * 400);
   }
 
-  async function handleUserInput(value: string) {
-    if (!value.trim() || typing || loading) return;
+  // Called for both free-text input and option chip selections.
+  // `displayText` is what appears in the chat bubble.
+  // `storedValue` is what gets saved to state (the clean DB value).
+  async function handleUserInput(displayText: string, storedValue: string) {
+    if (!displayText.trim() || typing || loading) return;
     setError(null);
+
     const currentStep = STEPS[step];
 
-    // Validate
+    // Validate free-text steps only
     if (currentStep.validate) {
-      const err = currentStep.validate(value);
+      const err = currentStep.validate(displayText);
       if (err) { setError(err); return; }
     }
 
-    // Append user bubble
-    setMessages((m) => [...m, { role: 'user', text: value }]);
+    // Append user bubble with the display text
+    setMessages((m) => [...m, { role: 'user', text: displayText }]);
     setInput('');
 
-    // Update state
+    // Store the clean value
     const key = currentStep.key!;
-    const newState = { ...state, [key]: value };
-    setState(newState);
+    const newCollected: OnboardingState = { ...collected, [key]: storedValue };
+    setCollected(newCollected);
 
     const nextStepIndex = step + 1;
     setStep(nextStepIndex);
 
-    // If this was the last data step, save and show link
-    if (nextStepIndex >= STEPS.length - 1) {
+    // All data steps complete — call API
+    if (nextStepIndex >= DATA_STEP_COUNT) {
       setLoading(true);
+      let savedId: string | null = null;
+
       try {
         const res = await fetch('/api/onboarding', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            full_name: newState.full_name,
-            goal:      newState.goal,
-            level:     newState.level,
-            daily_time: parseInt(newState.daily_time),
+            full_name:  newCollected.full_name,
+            goal:       newCollected.goal,
+            level:      newCollected.level,
+            daily_time: parseInt(newCollected.daily_time, 10),
           }),
         });
         const data = await res.json();
-        if (!res.ok) throw new Error(data.error ?? 'Failed to save');
-        setUserId(data.user_id);
+        if (!res.ok) throw new Error(data.error ?? 'Failed to save profile.');
+        savedId = data.user_id;
+        setUserId(savedId);
       } catch (e: any) {
         setError(e.message);
-      } finally {
         setLoading(false);
+        // Do NOT set done=true on failure — stop here so the user sees the error
+        return;
       }
 
-      setTyping(true);
-      setTimeout(() => {
-        setTyping(false);
-        setMessages((m) => [
-          ...m,
-          { role: 'ai', text: `You're all set, ${newState.full_name}! 🎉 Click the button below to open your personal Fox bot on Telegram. Your first lesson will arrive within 60 seconds!` },
-        ]);
-        setDone(true);
-      }, 1000);
+      setLoading(false);
+
+      // Only reach here on success
+      showAIMessage(
+        `You're all set, ${newCollected.full_name}! 🎉 Click the button below to open your personal Fox bot on Telegram. Your first lesson will arrive within 60 seconds!`
+      );
+      // Delay setting done so the Telegram button appears after the AI bubble animates in
+      setTimeout(() => setDone(true), 1400);
       return;
     }
 
-    // Next question
+    // Show next question
     const nextStep = STEPS[nextStepIndex];
     const question = typeof nextStep.question === 'function'
-      ? (nextStep.question as any)(newState.full_name)
+      ? nextStep.question(newCollected.full_name)
       : nextStep.question;
     showAIMessage(question);
   }
 
-  function handleOption(value: string, label: string) {
-    handleUserInput(label);
+  // Option chip click: display label in bubble, store clean value to DB
+  function handleOption(opt: Option) {
+    handleUserInput(opt.label, opt.value);
   }
 
-  const currentStep = STEPS[step] ?? STEPS[STEPS.length - 1];
-  const progress = Math.min(100, (step / (STEPS.length - 1)) * 100);
+  const currentStep = STEPS[step] ?? STEPS[DATA_STEP_COUNT - 1];
+  const progress    = Math.min(100, (step / DATA_STEP_COUNT) * 100);
+
+  // Build Telegram link at render time so it always picks up the env var
+  const botUsername  = process.env.NEXT_PUBLIC_TELEGRAM_BOT_USERNAME || '';
+  const telegramHref = botUsername && userId
+    ? `https://t.me/${botUsername}?start=${userId}`
+    : null;
 
   return (
     <div className="min-h-screen bg-[#050510] flex flex-col items-center justify-center px-4 py-12">
@@ -241,7 +255,7 @@ export default function OnboardingPage() {
         </div>
 
         {/* Title bar */}
-        <div className="flex items-center gap-3 px-6 py-4 border-b border-white/8">
+        <div className="flex items-center gap-3 px-6 py-4 border-b border-white/10">
           <div className="w-9 h-9 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center flex-shrink-0">
             <Zap className="w-4 h-4 text-white" />
           </div>
@@ -259,8 +273,9 @@ export default function OnboardingPage() {
 
         {/* Messages */}
         <div className="h-96 overflow-y-auto px-5 py-5 space-y-1 scroll-smooth">
-          {messages.map((m, i) => <Bubble key={i} msg={m} index={i} />)}
+          {messages.map((m, i) => <Bubble key={i} msg={m} />)}
 
+          {/* Typing indicator */}
           {typing && (
             <motion.div
               initial={{ opacity: 0 }}
@@ -276,8 +291,8 @@ export default function OnboardingPage() {
             </motion.div>
           )}
 
-          {/* Option chips */}
-          {!typing && !done && currentStep.options && (
+          {/* Option chips — hidden while typing or after flow completes */}
+          {!typing && !done && step < DATA_STEP_COUNT && currentStep.options && (
             <motion.div
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
@@ -287,8 +302,9 @@ export default function OnboardingPage() {
               {currentStep.options.map((opt) => (
                 <button
                   key={opt.value}
-                  onClick={() => handleOption(opt.value, opt.label)}
-                  className="glass rounded-xl px-4 py-2 text-sm text-white/80 hover:text-white hover:border-indigo-500/50 transition-all duration-200 hover:shadow-neon"
+                  onClick={() => handleOption(opt)}
+                  disabled={loading}
+                  className="glass rounded-xl px-4 py-2 text-sm text-white/80 hover:text-white hover:border-indigo-500/50 transition-all duration-200 hover:shadow-neon disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   {opt.label}
                 </button>
@@ -296,26 +312,7 @@ export default function OnboardingPage() {
             </motion.div>
           )}
 
-          {/* Telegram CTA */}
-          {done && userId && (
-            <motion.div
-              initial={{ opacity: 0, y: 16 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.3 }}
-              className="mt-4 flex justify-center"
-            >
-              <a
-                href={`https://t.me/${BOT_USERNAME}?start=${userId}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="btn-primary flex items-center gap-2 text-sm"
-              >
-                <ExternalLink className="w-4 h-4" />
-                Open Fox on Telegram
-              </a>
-            </motion.div>
-          )}
-
+          {/* Loading spinner */}
           {loading && (
             <motion.div
               initial={{ opacity: 0 }}
@@ -326,12 +323,39 @@ export default function OnboardingPage() {
             </motion.div>
           )}
 
+          {/* Telegram CTA — only shown on full success */}
+          {done && (
+            <motion.div
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.3 }}
+              className="mt-4 flex justify-center"
+            >
+              {telegramHref ? (
+                <a
+                  href={telegramHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="btn-primary flex items-center gap-2 text-sm"
+                >
+                  <ExternalLink className="w-4 h-4" />
+                  Open Fox on Telegram
+                </a>
+              ) : (
+                // Fallback if bot username env var is not set in Vercel dashboard
+                <p className="text-white/50 text-sm text-center">
+                  Open Telegram and search for your Fox bot to start learning!
+                </p>
+              )}
+            </motion.div>
+          )}
+
           <div ref={endRef} />
         </div>
 
-        {/* Error */}
+        {/* Error bar — only shown when not done */}
         <AnimatePresence>
-          {error && (
+          {error && !done && (
             <motion.p
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: 'auto' }}
@@ -343,11 +367,14 @@ export default function OnboardingPage() {
           )}
         </AnimatePresence>
 
-        {/* Input */}
-        {!done && !currentStep.options && (
-          <div className="px-4 py-4 border-t border-white/8">
+        {/* Text input — hidden for option steps and after done */}
+        {!done && step < DATA_STEP_COUNT && !currentStep.options && (
+          <div className="px-4 py-4 border-t border-white/10">
             <form
-              onSubmit={(e) => { e.preventDefault(); handleUserInput(input); }}
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleUserInput(input.trim(), input.trim());
+              }}
               className="flex gap-3"
             >
               <input
@@ -356,7 +383,7 @@ export default function OnboardingPage() {
                 onChange={(e) => setInput(e.target.value)}
                 disabled={typing || loading}
                 placeholder="Type your answer…"
-                className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-white/30 focus:outline-none focus:border-indigo-500/50 focus:bg-white/8 transition-all"
+                className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm text-white placeholder-white/30 focus:outline-none focus:border-indigo-500/50 transition-all"
               />
               <button
                 type="submit"
@@ -369,8 +396,9 @@ export default function OnboardingPage() {
           </div>
         )}
 
+        {/* Success footer — only shown on done */}
         {done && (
-          <div className="px-6 py-5 border-t border-white/8 flex items-center gap-2 text-green-400 text-sm">
+          <div className="px-6 py-5 border-t border-white/10 flex items-center gap-2 text-green-400 text-sm">
             <Check className="w-4 h-4" />
             Profile saved — waiting for you on Telegram!
           </div>
