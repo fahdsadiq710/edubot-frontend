@@ -1,0 +1,107 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Google Fonts via Next.js font system ─────────────────── */
+:root {
+  --font-inter: 'Inter', sans-serif;
+  --font-sora:  'Sora', sans-serif;
+}
+
+/* ── Base reset ───────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+
+html {
+  scroll-behavior: smooth;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(99,102,241,0.4) transparent;
+}
+
+body {
+  @apply bg-[#050510] text-white antialiased;
+  font-family: var(--font-inter);
+  overflow-x: hidden;
+}
+
+/* ── Custom scrollbar (webkit) ────────────────────────────── */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgba(99,102,241,0.4);
+  border-radius: 3px;
+}
+
+/* ── Glassmorphism utility ────────────────────────────────── */
+@layer components {
+  .glass {
+    @apply backdrop-blur-xl border border-white/10;
+    background: rgba(255, 255, 255, 0.04);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.08);
+  }
+
+  .glass-strong {
+    @apply backdrop-blur-2xl border border-white/15;
+    background: rgba(255, 255, 255, 0.07);
+    box-shadow: 0 20px 60px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.12);
+  }
+
+  .neon-border {
+    border: 1px solid transparent;
+    background:
+      linear-gradient(#050510, #050510) padding-box,
+      linear-gradient(135deg, #6366f1, #a855f7, #06b6d4) border-box;
+  }
+
+  .gradient-text {
+    @apply bg-clip-text text-transparent;
+    background-image: linear-gradient(135deg, #818cf8, #c084fc, #38bdf8);
+  }
+
+  .btn-primary {
+    @apply relative px-8 py-3 rounded-xl font-semibold text-white overflow-hidden transition-all duration-300;
+    background: linear-gradient(135deg, #6366f1, #a855f7);
+    box-shadow: 0 0 20px rgba(99,102,241,0.4);
+  }
+  .btn-primary::before {
+    content: '';
+    @apply absolute inset-0 opacity-0 transition-opacity duration-300;
+    background: linear-gradient(135deg, #818cf8, #c084fc);
+  }
+  .btn-primary:hover::before { @apply opacity-100; }
+  .btn-primary:hover { box-shadow: 0 0 40px rgba(99,102,241,0.7); transform: translateY(-1px); }
+
+  .section-title {
+    @apply font-display font-bold tracking-tight;
+    font-family: var(--font-sora);
+  }
+}
+
+/* ── Hero gradient mesh ───────────────────────────────────── */
+.hero-mesh {
+  background:
+    radial-gradient(ellipse 80% 60% at 50% -10%, rgba(99,102,241,0.25) 0%, transparent 70%),
+    radial-gradient(ellipse 50% 40% at 80% 60%, rgba(168,85,247,0.15) 0%, transparent 60%),
+    radial-gradient(ellipse 40% 30% at 10% 80%, rgba(6,182,212,0.12) 0%, transparent 60%);
+}
+
+/* ── Shimmer skeleton ─────────────────────────────────────── */
+.shimmer {
+  background: linear-gradient(
+    90deg,
+    rgba(255,255,255,0.05) 25%,
+    rgba(255,255,255,0.12) 50%,
+    rgba(255,255,255,0.05) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.8s infinite;
+}
+
+/* ── Chat bubble tail ─────────────────────────────────────── */
+.bubble-ai::before {
+  content: '';
+  position: absolute;
+  left: -8px;
+  top: 16px;
+  border: 8px solid transparent;
+  border-right-color: rgba(99,102,241,0.25);
+}
